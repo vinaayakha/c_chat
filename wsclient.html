@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ws_chat64k client</title>
+<style>
+  body { font: 14px/1.4 ui-monospace, monospace; max-width: 640px; margin: 2em auto; }
+  #log { border: 1px solid #ccc; padding: .5em; height: 320px; overflow-y: scroll; }
+  .ev   { color: #888; }
+  .me   { color: #06c; }
+  .them { color: #000; }
+  input { width: 100%; padding: .4em; font: inherit; box-sizing: border-box; }
+  .row { display: flex; gap: .5em; margin-top: .5em; }
+</style>
+<h2>ws_chat64k</h2>
+<div class="row">
+  <input id="url" value="ws://localhost:5555">
+  <input id="name" placeholder="nickname" style="width: 8em">
+  <button id="go">connect</button>
+</div>
+<div class="row" style="margin: .5em 0;">
+  <input id="msg" placeholder="type JSON like {&quot;text&quot;:&quot;hi&quot;} or plain text">
+  <button id="send" disabled>send</button>
+</div>
+<div id="log"></div>
+
+<script>
+const log  = document.getElementById('log');
+const msgI = document.getElementById('msg');
+const send = document.getElementById('send');
+let ws = null;
+
+function add(html, cls) {
+  const d = document.createElement('div');
+  d.className = cls || '';
+  d.textContent = html;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+document.getElementById('go').onclick = () => {
+  if (ws) ws.close();
+  const url  = document.getElementById('url').value;
+  const name = document.getElementById('name').value || 'anon';
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    add('connected as ' + name, 'ev');
+    ws.send(name);
+    send.disabled = false;
+  };
+  ws.onclose = () => { add('disconnected', 'ev'); send.disabled = true; };
+  ws.onerror = (e) => add('error: ' + e, 'ev');
+  ws.onmessage = (e) => {
+    try {
+      const env = JSON.parse(e.data);
+      if (env.event === 'welcome') add('* welcome', 'ev');
+      else if (env.event === 'join')  add('* ' + env.name + ' joined', 'ev');
+      else if (env.event === 'leave') add('* ' + env.name + ' left',   'ev');
+      else if (env.from) {
+        // env.msg may itself be JSON-encoded JSON, or just a string
+        let body = env.msg;
+        try { body = JSON.stringify(JSON.parse(env.msg)); } catch {}
+        add('<' + env.from + '> ' + body, 'them');
+      } else add(e.data, 'them');
+    } catch { add(e.data, 'them'); }
+  };
+};
+
+function doSend() {
+  const t = msgI.value;
+  if (!t || !ws || ws.readyState !== 1) return;
+  ws.send(t);
+  add('  me> ' + t, 'me');
+  msgI.value = '';
+}
+send.onclick = doSend;
+msgI.onkeydown = e => { if (e.key === 'Enter') doSend(); };
+</script>
