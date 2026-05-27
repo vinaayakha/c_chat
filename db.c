@@ -1,3 +1,5 @@
+/* Enable GNU extensions (setenv with overwrite=0 semantics, getline, etc).
+ * Must precede any system header. */
 #define _GNU_SOURCE
 #include "db.h"
 #include <stdio.h>
@@ -10,10 +12,29 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
+/* PBKDF2-HMAC-SHA256 iteration count for password hashing. OWASP 2023
+ * recommends >=600k for SHA-256; 100k chosen as a cheap-server compromise.
+ * Raise this on faster hardware. Changing it does NOT invalidate existing
+ * hashes only if iters are stored per-row — they aren't here, so a change
+ * requires re-registering all users. */
 #define PBKDF2_ITERS  100000
+
+/* Per-user random salt length in bytes. 16 (128 bits) is well above the
+ * NIST minimum and prevents rainbow-table reuse across users. */
 #define PBKDF2_SALT    16
+
+/* Derived key length in bytes. 32 = SHA-256 output size; using the native
+ * digest length avoids unnecessary PBKDF2 block iterations. */
 #define PBKDF2_HASH    32
-#define SESSION_BYTES  32   /* -> 64 hex chars */
+
+/* Session token raw byte length from CSPRNG. Stored hex-encoded, so the
+ * DB token column holds 2*SESSION_BYTES chars. 32 bytes = 256 bits of
+ * entropy — well beyond brute-force reach. */
+#define SESSION_BYTES  32
+
+/* Session lifetime in seconds. Sessions expire absolutely (no sliding
+ * renewal); after this the client must re-login. 7 days picked for a
+ * chat client UX — short enough to limit stolen-token blast radius. */
 #define SESSION_TTL_S  (7 * 24 * 3600)
 
 static PGconn *conn = NULL;

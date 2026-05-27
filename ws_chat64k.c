@@ -20,6 +20,8 @@
  * Build (static, scratch image): see Dockerfile.
  */
 
+/* Enable GNU extensions: accept4(), SOCK_NONBLOCK, EPOLLRDHUP, etc.
+ * Must precede any system header. */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,16 +39,49 @@
 #include "db.h"
 #include "bundled.h"
 
+/* Max concurrent connections. Bounds the clients[] array; one slot per fd.
+ * Memory cost ~= MAX_CLIENTS * sizeof(struct ws_client). */
 #define MAX_CLIENTS    512
+
+/* Max events drained per epoll_wait() call. Larger = fewer syscalls under
+ * load but more latency variance per batch. */
 #define EPOLL_BATCH    64
+
+/* Shared scratch buffer for WS-mode recv(). Big enough for several
+ * back-to-back frames; not used during HTTP request reads (those go into
+ * the per-client req_buf). */
 #define READ_BUF_LEN   4096
+
+/* Shared scratch buffer used to format outbound broadcast JSON envelopes
+ * like {"from":"...","msg":"..."}. Bounds payload + JSON wrapper. */
 #define MSG_BUF_LEN    2048
+
+/* Max nickname length (and DB username display length).
+ * Inbound text frames in ST_NAMING are truncated to this. */
 #define NAME_MAX_LEN   32
+
+/* Max bytes of WS frame payload accepted from a client. Frames larger
+ * than this fail the connection. Sized for chat messages, not file
+ * transfer. Also bounds the per-client ws_partial[] cross-recv buffer. */
 #define MAX_PAYLOAD    1200
+
+/* Per-client HTTP request buffer. Holds the full request line + headers
+ * + body until parsed. Requests larger than this are rejected with 413. */
 #define REQ_BUF_LEN    4096
+
+/* Max accepted Content-Length for POST bodies (register/login/logout JSON).
+ * Keeps the JSON parser bounded and rejects oversized bodies early. */
 #define MAX_BODY_LEN   1024
+
+/* Sentinel stored in epoll_event.data.u32 to mark the listening socket,
+ * distinguishing it from real client slot indices (0..MAX_CLIENTS-1). */
 #define LISTEN_SLOT    0xFFFFFFFFu
+
+/* TCP port used if neither argv[1] nor the PORT env var is set. */
 #define PORT_DEFAULT   5555
+
+/* RFC 6455 GUID concatenated with Sec-WebSocket-Key before SHA-1 to
+ * compute the Sec-WebSocket-Accept handshake response. Do not change. */
 #define WS_MAGIC       "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 enum { ST_REQ = 0, ST_NAMING = 1, ST_OPEN = 2, ST_SENDING = 3 };

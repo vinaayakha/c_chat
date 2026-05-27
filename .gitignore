@@ -1,5 +1,4 @@
 .DS_Store
 .env
 ws_chat64k
-chat64k
 *.o
