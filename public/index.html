@@ -1,85 +1,186 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>ws_chat64k client</title>
+<title>ws_chat64k</title>
 <style>
-  body { font: 14px/1.4 ui-monospace, monospace; max-width: 640px; margin: 2em auto; }
-  #log { border: 1px solid #ccc; padding: .5em; height: 320px; overflow-y: scroll; }
-  .ev   { color: #888; }
-  .me   { color: #06c; }
+  :root { --b: #ccc; --mut: #888; --me: #06c; --err: #c00; }
+  body { font: 14px/1.4 ui-monospace, monospace; max-width: 720px; margin: 2em auto; padding: 0 1em; }
+  h2 { margin: 0 0 .5em; }
+  .panel { border: 1px solid var(--b); padding: 1em; margin-bottom: 1em; border-radius: 4px; }
+  .tabs { display: flex; gap: .5em; margin-bottom: .5em; }
+  .tabs button { flex: 1; padding: .5em; cursor: pointer; }
+  .tabs button.on { background: #eef; }
+  input, button { font: inherit; padding: .4em; box-sizing: border-box; }
+  input { width: 100%; margin: .25em 0; }
+  .row { display: flex; gap: .5em; }
+  .row > input { flex: 1; }
+  #log { border: 1px solid var(--b); padding: .5em; height: 360px; overflow-y: scroll; border-radius: 4px; }
+  .ev   { color: var(--mut); }
+  .me   { color: var(--me); }
   .them { color: #000; }
-  input { width: 100%; padding: .4em; font: inherit; box-sizing: border-box; }
-  .row { display: flex; gap: .5em; margin-top: .5em; }
+  .err  { color: var(--err); }
+  .hist { color: #555; font-style: italic; }
+  .who  { font-size: .9em; color: var(--mut); margin-bottom: .5em; }
+  button { cursor: pointer; }
+  .hide { display: none; }
 </style>
+
 <h2>ws_chat64k</h2>
-<div class="row">
-  <input id="url" placeholder="wss://your-server.example/ws">
-  <input id="name" placeholder="nickname" style="width: 8em">
-  <button id="go">connect</button>
+
+<div id="auth" class="panel">
+  <div class="tabs">
+    <button id="tabLogin" class="on" type="button">login</button>
+    <button id="tabReg" type="button">register</button>
+  </div>
+  <input id="au_user" placeholder="username" autocomplete="username">
+  <input id="au_pw" type="password" placeholder="password" autocomplete="current-password">
+  <div class="row">
+    <button id="au_go" type="button">login</button>
+    <button id="au_guest" type="button">continue as guest</button>
+  </div>
+  <div id="au_err" class="err"></div>
 </div>
-<div class="row" style="margin: .5em 0;">
-  <input id="msg" placeholder="type JSON like {&quot;text&quot;:&quot;hi&quot;} or plain text">
-  <button id="send" disabled>send</button>
+
+<div id="chat" class="panel hide">
+  <div class="who">connected as <b id="me"></b>
+    &middot; <a href="#" id="logout">logout</a>
+    &middot; server: <input id="wsurl" style="width: 14em; display: inline;"></div>
+  <div class="row" style="margin-bottom: .5em;">
+    <input id="msg" placeholder="message — Enter to send">
+    <button id="send" type="button" disabled>send</button>
+  </div>
+  <div id="log"></div>
 </div>
-<div id="log"></div>
 
 <script>
-const log  = document.getElementById('log');
-const msgI = document.getElementById('msg');
-const send = document.getElementById('send');
-const urlI = document.getElementById('url');
-let ws = null;
+const $ = id => document.getElementById(id);
+const log = $('log');
+let ws = null, mode = 'login', token = null, me = null;
 
-// WS URL precedence: ?ws= query param > localStorage > default
-const qsWs = new URLSearchParams(location.search).get('ws');
-urlI.value = qsWs
-  || localStorage.getItem('ws_url')
-  || (location.protocol === 'https:'
-        ? 'wss://' + location.host + '/ws'
-        : 'ws://localhost:5555');
+const httpBase = location.origin.startsWith('http') ? location.origin : 'http://localhost:' + (location.port || '34905');
+const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 
-function add(html, cls) {
+$('wsurl').value = localStorage.getItem('ws_url') || wsBase;
+
+function setMode(m) {
+  mode = m;
+  $('tabLogin').classList.toggle('on', m === 'login');
+  $('tabReg').classList.toggle('on', m === 'register');
+  $('au_go').textContent = m === 'login' ? 'login' : 'register';
+  $('au_err').textContent = '';
+}
+$('tabLogin').onclick = () => setMode('login');
+$('tabReg').onclick   = () => setMode('register');
+
+function add(text, cls) {
   const d = document.createElement('div');
   d.className = cls || '';
-  d.textContent = html;
+  d.textContent = text;
   log.appendChild(d);
   log.scrollTop = log.scrollHeight;
 }
 
-document.getElementById('go').onclick = () => {
-  if (ws) ws.close();
-  const url  = urlI.value;
-  const name = document.getElementById('name').value || 'anon';
+async function api(path, body) {
+  const r = await fetch(httpBase + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  let j = {}; try { j = JSON.parse(t); } catch {}
+  if (!r.ok) throw new Error(j.error || ('http ' + r.status));
+  return j;
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch(httpBase + '/api/history?limit=50');
+    if (!r.ok) return;
+    const rows = await r.json();
+    for (const m of rows) add('<' + m.from + '> ' + m.msg, 'hist');
+    if (rows.length) add('— end of history —', 'ev');
+  } catch (e) { add('history error: ' + e, 'err'); }
+}
+
+function openWs(authPayload) {
+  // authPayload is either { token } or { guest: name }
+  const url = $('wsurl').value;
   localStorage.setItem('ws_url', url);
-  ws = new WebSocket(url);
+  const protos = authPayload.token
+    ? ['bearer.' + authPayload.token]
+    : [];
+  ws = protos.length ? new WebSocket(url, protos) : new WebSocket(url);
+
   ws.onopen = () => {
-    add('connected as ' + name, 'ev');
-    ws.send(name);
-    send.disabled = false;
+    add('connected as ' + me, 'ev');
+    if (authPayload.guest) ws.send(authPayload.guest);
+    $('send').disabled = false;
   };
-  ws.onclose = () => { add('disconnected', 'ev'); send.disabled = true; };
-  ws.onerror = (e) => add('error: ' + e, 'ev');
+  ws.onclose = () => { add('disconnected', 'ev'); $('send').disabled = true; };
+  ws.onerror = () => add('socket error', 'err');
   ws.onmessage = (e) => {
     try {
       const env = JSON.parse(e.data);
-      if (env.event === 'welcome') add('* welcome', 'ev');
-      else if (env.event === 'join')  add('* ' + env.name + ' joined', 'ev');
-      else if (env.event === 'leave') add('* ' + env.name + ' left',   'ev');
-      else if (env.from) {
-        let body = env.msg;
-        try { body = JSON.stringify(JSON.parse(env.msg)); } catch {}
-        add('<' + env.from + '> ' + body, 'them');
-      } else add(e.data, 'them');
+      if (env.event === 'welcome')      add('* welcome', 'ev');
+      else if (env.event === 'join')    add('* ' + env.name + ' joined', 'ev');
+      else if (env.event === 'leave')   add('* ' + env.name + ' left',   'ev');
+      else if (env.from)                add('<' + env.from + '> ' + env.msg, 'them');
+      else add(e.data, 'them');
     } catch { add(e.data, 'them'); }
   };
+}
+
+function enterChat(displayName) {
+  me = displayName;
+  $('me').textContent = me;
+  $('auth').classList.add('hide');
+  $('chat').classList.remove('hide');
+  log.innerHTML = '';
+  loadHistory().then(() => {
+    openWs(token ? { token } : { guest: me });
+  });
+}
+
+$('au_go').onclick = async () => {
+  $('au_err').textContent = '';
+  const u = $('au_user').value.trim(), p = $('au_pw').value;
+  if (!u || !p) { $('au_err').textContent = 'username + password required'; return; }
+  try {
+    const r = await api('/api/' + (mode === 'login' ? 'login' : 'register'), { username: u, password: p });
+    token = r.token;
+    localStorage.setItem('token', token);
+    localStorage.setItem('me', u);
+    enterChat(u);
+  } catch (e) { $('au_err').textContent = e.message; }
+};
+
+$('au_guest').onclick = () => {
+  const u = $('au_user').value.trim() || 'anon';
+  token = null;
+  enterChat(u);
+};
+
+$('logout').onclick = async (e) => {
+  e.preventDefault();
+  if (ws) ws.close();
+  if (token) { try { await api('/api/logout', { token }); } catch {} }
+  token = null; me = null;
+  localStorage.removeItem('token'); localStorage.removeItem('me');
+  $('chat').classList.add('hide'); $('auth').classList.remove('hide');
 };
 
 function doSend() {
-  const t = msgI.value;
+  const t = $('msg').value;
   if (!t || !ws || ws.readyState !== 1) return;
   ws.send(t);
   add('  me> ' + t, 'me');
-  msgI.value = '';
+  $('msg').value = '';
 }
-send.onclick = doSend;
-msgI.onkeydown = e => { if (e.key === 'Enter') doSend(); };
+$('send').onclick = doSend;
+$('msg').addEventListener('keydown', e => { if (e.key === 'Enter') doSend(); });
+
+// Auto-resume session if present.
+(async () => {
+  const t = localStorage.getItem('token'), u = localStorage.getItem('me');
+  if (t && u) { token = t; enterChat(u); }
+})();
 </script>
