@@ -43,7 +43,16 @@ logs:
 stop:
 	docker rm -f $(IMAGE) 2>/dev/null || true
 
+# Integration tests. Boots a container if none is running, then hits HTTP+WS.
+test:
+	@if ! docker ps --filter name=$(IMAGE) --filter status=running -q | grep -q .; then \
+		echo "starting container for tests..."; \
+		$(MAKE) -s run-detached; \
+		sleep 2; \
+	fi
+	PORT=$(PORT) bash tests/run.sh
+
 clean:
 	rm -f $(BIN)
 
-.PHONY: clean run run-native run-detached docker-build logs stop
+.PHONY: clean run run-native run-detached docker-build logs stop test
